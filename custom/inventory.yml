@@ -1,0 +1,7 @@
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+    hypervisor-1:
+      ansible_user: my_remote_user
+      ansible_host: hypervisor.localnet

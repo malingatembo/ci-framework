@@ -1,0 +1,77 @@
+---
+# Based on scenarios/reproducers/3-nodes.yml from official docs
+
+cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+cifmw_path: "{{ ansible_user_dir }}/.crc/bin:{{ ansible_user_dir }}/.crc/bin/oc:{{ ansible_user_dir }}/bin:{{ ansible_env.PATH }}"
+
+cifmw_manage_secrets_pullsecret_file: "{{ ansible_user_dir }}/ci-framework-data/pull-secret.txt"
+
+cifmw_rhol_crc_config:
+  disk-size: 100
+  memory: 32000
+
+cifmw_use_libvirt: true
+
+cifmw_libvirt_manager_configuration:
+  vms:
+    crc:
+      admin_user: core
+      image_local_dir: "{{ ansible_user_dir }}/.crc/machines/crc/"
+      disk_file_name: "crc.qcow2"
+      disksize: 150
+      memory: 32
+      cpus: 24
+      nets:
+        - public
+        - osp_trunk
+    compute:
+      amount: 1
+      image_url: "{{ cifmw_discovered_image_url }}"
+      sha256_image_name: "{{ cifmw_discovered_hash }}"
+      image_local_dir: "{{ cifmw_basedir }}/images/"
+      disk_file_name: "centos-stream-9.qcow2"
+      disksize: 50
+      memory: 8
+      cpus: 4
+      nets:
+        - public
+        - osp_trunk
+    controller:
+      image_url: "{{ cifmw_discovered_image_url }}"
+      sha256_image_name: "{{ cifmw_discovered_hash }}"
+      image_local_dir: "{{ cifmw_basedir }}/images/"
+      disk_file_name: "centos-stream-9.qcow2"
+      disksize: 50
+      memory: 8
+      cpus: 4
+      nets:
+        - public
+        - osp_trunk
+  networks:
+    public: |-
+      <network>
+        <name>public</name>
+        <forward mode='nat'/>
+        <bridge name='public' stp='on' delay='0'/>
+        <mac address='52:54:00:6a:f2:dc'/>
+        <dns enable="no"/>
+        <ip family='ipv4' address='192.168.100.1' prefix='24'>
+        </ip>
+      </network>
+    osp_trunk: |-
+      <network>
+        <name>osp_trunk</name>
+        <forward mode='nat'/>
+        <bridge name='osp_trunk' stp='on' delay='0'/>
+        <mac address='52:54:00:fd:be:d0'/>
+        <dns enable="no"/>
+        <ip family='ipv4' address='{{ cifmw_networking_definition.networks.ctlplane.gateway }}' prefix='{{ cifmw_networking_definition.networks.ctlplane.network | ansible.utils.ipaddr('prefix') }}'>
+        </ip>
+      </network>
+
+post_deploy:
+  - name: "Test post-deploy hook"
+    type: playbook
+    source: "{{ ansible_user_dir }}/team-deployments/hooks/test-webhook.yml"
+
+cifmw_libvirt_manager_user: zuul
