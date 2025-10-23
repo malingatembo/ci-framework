@@ -23,6 +23,10 @@
   set_fact:
     _runtime_install_yamls_basedir: "{{ _actual_home_install_yamls.stdout }}/ci-framework-data"
 
+- name: Set runtime src dir for install_yamls
+  set_fact:
+    _runtime_install_yamls_src: "{{ _actual_home_install_yamls.stdout }}/src/github.com/openstack-k8s-operators/install_yamls"
+
 - name: Ensure directories exist
   tags:
     - bootstrap
@@ -92,7 +96,7 @@
   register: get_makefiles_env_output
   environment: "{{ cifmw_install_yamls_environment }}"
   cifmw.general.get_makefiles_env:
-    base_path: "{{ cifmw_install_yamls_repo }}"
+    base_path: "{{ _runtime_install_yamls_src }}" 
 
 - name: Create env var if needed
   tags:
