@@ -1,7 +1,16 @@
 ---
+- name: Get actual HOME directory
+  shell: echo $HOME
+  register: _actual_home
+  changed_when: false
+
+- name: Set runtime basedir
+  set_fact:
+    _runtime_basedir: "{{ _actual_home.stdout }}/ci-framework-data"
+
 - name: Ensure directories are present
   ansible.builtin.file:
-    path: "{{ cifmw_repo_setup_basedir }}/{{ item }}"
+    path: "{{ _runtime_basedir }}/{{ item }}"
     state: directory
     mode: "0755"
   loop:
@@ -21,17 +30,17 @@
 - name: Get repo-setup repository # noqa: latest[git]
   ansible.builtin.git:
     accept_hostkey: true
-    dest: "{{ cifmw_repo_setup_basedir }}/tmp/repo-setup"
+    dest: "{{ _runtime_basedir }}/tmp/repo-setup"
     repo: "{{ cifmw_repo_setup_src }}"
 
 - name: Initialize python venv and install requirements
   ansible.builtin.pip:
-    virtualenv: "{{ cifmw_repo_setup_venv }}"
-    requirements: "{{ cifmw_repo_setup_basedir }}/tmp/repo-setup/requirements.txt"
+    virtualenv: "{{ _runtime_basedir }}/venv/repo_setup"
+    requirements: "{{ _runtime_basedir }}/tmp/repo-setup/requirements.txt"
     virtualenv_command: "python3 -m venv  --system-site-packages --upgrade-deps"
 
 - name: Install repo-setup package
   ansible.builtin.command:
-    cmd: "{{ cifmw_repo_setup_venv }}/bin/python setup.py install"
-    chdir: "{{ cifmw_repo_setup_basedir }}/tmp/repo-setup"
-    creates: "{{ cifmw_repo_setup_venv }}/bin/repo-setup"
+    cmd: "{{ _runtime_basedir }}/venv/repo_setup/bin/python setup.py install"
+    chdir: "{{ _runtime_basedir }}/tmp/repo-setup"
+    creates: "{{ _runtime_basedir }}/venv/repo_setup/bin/repo-setup"
