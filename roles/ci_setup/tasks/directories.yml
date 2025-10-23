@@ -7,6 +7,11 @@
 # podman run --rm -v /home/toto/foo:/home/container/ci-framework-data \
 #   ansible-playbook ...
 
+- name: Get actual user on delegated host
+  shell: whoami
+  register: _actual_user
+  changed_when: false
+
 - name: Manage directories
   tags:
     - always
@@ -15,8 +20,8 @@
     path: "{{ item }}"
     state: "{{ directory_state }}"
     mode: "0755"
-    owner: "{{ ansible_user_id }}"
-    group: "{{ ansible_user_id }}"
+    owner: "{{ _actual_user.stdout }}"
+    group: "{{ _actual_user.stdout }}"
   loop:
     - "{{ cifmw_manifests | default(cifmw_ci_setup_basedir ~ '/artifacts/manifests') }}/\
     {{ cifmw_install_yamls_defaults['NAMESPACE'] | default('openstack') }}/cr"
