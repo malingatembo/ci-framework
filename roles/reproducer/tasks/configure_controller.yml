@@ -358,19 +358,27 @@
       run_once: true
       ignore_errors: true
 
+
+    - name: Get actual HOME directory on controllers
+      ansible.builtin.shell: echo $HOME
+      register: _controller_home
+      changed_when: false
+      loop: "{{ groups['controllers'] }}"
+
     - name: Sync local repositories to other hosts if present
       delegate_to: localhost
       ansible.posix.synchronize:
         src: "{{ cifmw_reproducer_src_dir }}/"
-        dest: "zuul@{{ item }}:{{ cifmw_reproducer_src_dir }}"
+        dest: "zuul@{{ item.item }}:{{ item.stdout }}/src"
         archive: true
         recursive: true
-      loop: "{{ groups['controllers'] }}"
+      loop: "{{ _controller_home.results }}"
       when:
         - cifmw_reproducer_src_dir_stat.stat is defined
         - cifmw_reproducer_src_dir_stat.stat.exists
         - cifmw_reproducer_src_dir_stat.stat.isdir
-
+      loop_control:
+        label: "{{ item.item }}"
     - name: Check if local common-requirements.txt exists
       delegate_to: localhost
       ansible.builtin.stat:
