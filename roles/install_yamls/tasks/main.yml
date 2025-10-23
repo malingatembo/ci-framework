@@ -163,7 +163,7 @@
     - bootstrap
   register: cifmw_generate_makes
   generate_make_tasks:
-    install_yamls_path: "{{ cifmw_install_yamls_repo }}"
+    install_yamls_path: "{{ _runtime_install_yamls_src }}"
     output_directory: "{{ _runtime_install_yamls_tasks_out }}"
 
 - name: Debug generate_make module
