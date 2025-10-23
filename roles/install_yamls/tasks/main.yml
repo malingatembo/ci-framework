@@ -27,6 +27,10 @@
   set_fact:
     _runtime_install_yamls_src: "{{ _actual_home_install_yamls.stdout }}/src/github.com/openstack-k8s-operators/install_yamls"
 
+- name: Set runtime tasks output dir for install_yamls
+  set_fact:
+    _runtime_install_yamls_tasks_out: "{{ _runtime_install_yamls_basedir }}/artifacts/roles/install_yamls_makes/tasks"
+
 - name: Ensure directories exist
   tags:
     - bootstrap
@@ -160,7 +164,7 @@
   register: cifmw_generate_makes
   generate_make_tasks:
     install_yamls_path: "{{ cifmw_install_yamls_repo }}"
-    output_directory: "{{ cifmw_install_yamls_tasks_out }}"
+    output_directory: "{{ _runtime_install_yamls_tasks_out }}"
 
 - name: Debug generate_make module
   tags:
