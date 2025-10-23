@@ -288,11 +288,22 @@
             # NOTE: need to overwrite parent vars:
             # ./roles/reproducer/molecule/crc_layout/converge.yml
             cifmw_basedir: "{{ ansible_user_dir ~ '/ci-framework-data' }}"
+            cifmw_repo_setup_basedir: "/home/zuul/ci-framework-data"
+            cifmw_ci_setup_oc_install_path: "/home/zuul/bin"
           no_log: "{{ cifmw_nolog | default(true) | bool }}"
           ansible.builtin.import_role:
             name: cifmw_setup
             tasks_from: bootstrap.yml
 
+
+        - name: Get actual HOME directory on controller-0 for install_yamls
+          ansible.builtin.shell: echo $HOME
+          register: _actual_home_reproducer_devsetup
+          changed_when: false
+
+        - name: Set runtime install_yamls src path for reproducer
+          ansible.builtin.set_fact:
+            _runtime_reproducer_install_yamls: "{{ _actual_home_reproducer_devsetup.stdout }}/src/github.com/openstack-k8s-operators/install_yamls"
         - name: Install dev tools from install_yamls on controller-0
           environment:
             ANSIBLE_LOG_PATH: "~/ansible-bootstrap.log"
@@ -300,7 +311,7 @@
             _devsetup_path: >-
               {{
                 (
-                  cifmw_install_yamls_repo | default('/home/zuul/src/github.com/openstack-k8s-operators/install_yamls'),
+                  _runtime_reproducer_install_yamls,
                   'devsetup'
                 ) | ansible.builtin.path_join
               }}
