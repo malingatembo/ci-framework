@@ -14,6 +14,15 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+- name: Get actual HOME directory for install_yamls
+  shell: echo $HOME
+  register: _actual_home_install_yamls
+  changed_when: false
+
+- name: Set runtime basedir for install_yamls
+  set_fact:
+    _runtime_install_yamls_basedir: "{{ _actual_home_install_yamls.stdout }}/ci-framework-data"
+
 - name: Ensure directories exist
   tags:
     - bootstrap
@@ -22,9 +31,9 @@
     state: directory
     mode: "0755"
   loop:
-    - "{{ cifmw_install_yamls_out_dir }}"
-    - "{{ cifmw_install_yamls_tasks_out }}"
-    - "{{ cifmw_basedir|default(ansible_user_dir ~ '/ci-framework-data') }}/artifacts/parameters"
+    - "{{ _runtime_install_yamls_basedir }}/artifacts"
+    - "{{ _runtime_install_yamls_basedir }}/artifacts/roles/install_yamls_makes/tasks"
+    - "{{ _runtime_install_yamls_basedir }}/artifacts/parameters"
 
 - name: Create variables with local repos based on Zuul items
   tags:
