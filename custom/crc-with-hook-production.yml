@@ -1,5 +1,5 @@
 ---
-# Based on scenarios/reproducers/3-nodes.yml from official docs
+# Production-grade configuration with automatic hook execution
 
 cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
 cifmw_path: "{{ ansible_user_dir }}/.crc/bin:{{ ansible_user_dir }}/.crc/bin/oc:{{ ansible_user_dir }}/bin:{{ ansible_env.PATH }}"
@@ -70,13 +70,18 @@ cifmw_libvirt_manager_configuration:
         </ip>
       </network>
 
+# PRODUCTION-GRADE: Enable architecture deployment for automatic hook execution
+cifmw_deploy_architecture: true
+
+# Hook configuration - will execute automatically at post_infra phase
 post_infra:
   - name: "Test post-deploy hook"
     type: playbook
     source: "{{ ansible_user_dir }}/team-deployments/hooks/test-webhook.yml"
 
+# Critical fixes for delegation bugs
 cifmw_nolog: false
 cifmw_libvirt_manager_user: zuul
 
-# install_yamls repo location
+# install_yamls repo location (required)
 cifmw_install_yamls_repo: "{{ ansible_user_dir }}/src/github.com/openstack-k8s-operators/install_yamls"
