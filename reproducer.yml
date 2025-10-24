@@ -114,3 +114,13 @@
       delegate_to: controller-0
       ansible.builtin.command:
         cmd: "/home/zuul/post_deployment.sh {{ cifmw_post_deploy_args | default('') }}"
+
+- name: Run post_infra hooks
+  hosts: "{{ cifmw_target_host | default('localhost') }}"
+  gather_facts: false
+  tasks:
+    - name: Execute post_infra hooks
+      vars:
+        step: post_infra
+      ansible.builtin.import_role:
+        name: run_hook
