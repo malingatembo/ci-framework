@@ -1,0 +1,33 @@
+---
+# Full OpenStack deployment with post_deploy hook
+# Based on va-hci.yml scenario
+
+# Parent scenario - this brings in OpenStack deployment configuration
+cifmw_parent_scenario: "scenarios/reproducers/va-hci.yml"
+
+# CRITICAL: Enable OpenStack architecture deployment
+cifmw_deploy_architecture: true
+
+# REQUIRED: Enable libvirt for VM deployment
+cifmw_use_libvirt: true
+
+# Base directory for CI Framework data
+cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+
+# Path configuration
+cifmw_path: "{{ ansible_user_dir }}/.crc/bin:{{ ansible_user_dir }}/.crc/bin/oc:{{ ansible_user_dir }}/bin:{{ ansible_env.PATH }}"
+
+# Pull secret configuration (required for CRC and OpenShift)
+cifmw_manage_secrets_pullsecret_file: "{{ ansible_user_dir }}/ci-framework-data/pull-secret.txt"
+
+# Libvirt user fix (from your previous work)
+cifmw_libvirt_manager_user: zuul
+
+# Disable log suppression for debugging
+cifmw_nolog: false
+
+# post_deploy hook definition - will run AFTER OpenStack is fully deployed
+post_deploy:
+  - name: "Test post-deploy hook after OpenStack deployment"
+    type: playbook
+    source: "{{ ansible_user_dir }}/team-deployments/hooks/test-webhook.yml"

@@ -1,0 +1,405 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+- name: Discover latest image
+  tags:
+    - bootstrap
+    - bootstrap_layout
+  ansible.builtin.import_role:
+    name: discover_latest_image
+
+- name: Load CI job environment
+  tags:
+    - bootstrap_layout
+  when:
+    - cifmw_job_uri is defined
+  ansible.builtin.include_tasks:
+    file: ci_data.yml
+    apply:
+      tags:
+        - bootstrap_layout
+
+- name: Discover and expose CI Framework path on remote node
+  tags:
+    - always
+  vars:
+    default_path: >-
+      {{
+        cifmw_reproducer_default_repositories |
+        selectattr('src', 'match', '^.*/ci[_\-]framework$') |
+        map(attribute='dest') | first
+      }}
+    custom_path: >-
+      {{
+        cifmw_reproducer_repositories |
+        selectattr('src', 'match', '^.*/ci-framework$') |
+        map(attribute='dest')
+      }}
+    _path: >-
+      {{
+        (custom_path | length > 0) |
+        ternary(custom_path | first, default_path)
+      }}
+  ansible.builtin.set_fact:
+    _cifmw_reproducer_framework_location: >-
+      {{
+        (_path is match('.*/ci-framework/?$')) |
+        ternary(_path, [_path, 'ci-framework'] | path_join)
+      }}
+
+- name: Build final libvirt layout
+  tags:
+    - bootstrap_env
+    - bootstrap_layout
+  when:
+    - cifmw_use_libvirt | default(false) | bool
+  ansible.builtin.include_role:
+    name: "libvirt_manager"
+    tasks_from: "generate_layout.yml"
+
+- name: Assert no conflicting parameters were passed
+  tags:
+    - always
+  ansible.builtin.assert:
+    that:
+      - (_cifmw_libvirt_manager_layout.vms.crc is defined) or
+        (_cifmw_libvirt_manager_layout.vms.ocp is defined)
+      - not ((_cifmw_libvirt_manager_layout.vms.crc is defined) and
+             (_cifmw_libvirt_manager_layout.vms.ocp is defined))
+    quiet: true
+    msg: >-
+      You cannot get both OpenShift cluster types.
+      Please chose between CRC and OCP cluster.
+
+- name: Assert that deprecated cifmw_reproducer_internal_ca parameters was not passed
+  tags:
+    - always
+  ansible.builtin.assert:
+    that:
+      - cifmw_reproducer_internal_ca is not defined
+    msg: >-
+      The parameter cifmw_reproducer_internal_ca to install additional CAs is
+      deprecated, please use parameters from the install_ca role instead, like
+      cifmw_install_ca_url to download from a url or cifmw_install_ca_bundle_src
+      to use a file present on the host.
+
+- name: Set _use_crc based on actual layout
+  tags:
+    - always
+  vars:
+    _use_crc: >-
+      {{
+        _cifmw_libvirt_manager_layout.vms.crc is defined and
+        (
+          (_cifmw_libvirt_manager_layout.vms.crc.amount is defined and
+           _cifmw_libvirt_manager_layout.vms.crc.amount|int > 0) or
+        _cifmw_libvirt_manager_layout.vms.crc.amount is undefined)
+      }}
+    _use_ocp: >-
+      {{
+        _cifmw_libvirt_manager_layout.vms.ocp is defined and
+        (_cifmw_libvirt_manager_layout.vms.ocp.amount is defined and
+         _cifmw_libvirt_manager_layout.vms.ocp.amount|int > 0)
+      }}
+  ansible.builtin.set_fact:
+    _use_crc: "{{ _use_crc }}"
+    _use_ocp: "{{ _use_ocp }}"
+    _has_openshift: "{{ _use_ocp or _use_crc }}"
+
+- name: Ensure directories are present
+  tags:
+    - always
+  ansible.builtin.file:
+    path: "{{ cifmw_reproducer_basedir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - artifacts
+    - logs
+
+- name: Bootstrap libvirt if needed
+  when:
+    - cifmw_use_libvirt | default(false) | bool
+  tags:
+    - bootstrap_libvirt
+  ansible.builtin.include_role:
+    name: libvirt_manager
+    apply:
+      tags:
+        - bootstrap_libvirt
+
+- name: Deploy networks in libvirt
+  when:
+    - cifmw_use_libvirt | default(false) | bool
+  tags:
+    - bootstrap
+    - bootstrap_env
+    - bootstrap_layout
+  ansible.builtin.include_tasks:
+    file: prepare_networking.yml
+    apply:
+      tags:
+        - bootstrap
+        - bootstrap_env
+        - bootstrap_layout
+
+- name: Bootstrap nat64 if needed
+  when:
+    - cifmw_use_libvirt | default(false) | bool
+    - cifmw_use_nat64 | default(false) | bool
+  tags:
+    - bootstrap_nat64
+    - bootstrap_layout
+    - bootstrap_env
+  ansible.builtin.include_tasks:
+    file: nat64_appliance.yml
+    apply:
+      tags:
+        - bootstrap_nat64
+        - bootstrap_layout
+        - bootstrap_env
+
+- name: Deploy CRC if needed
+  when:
+    - _use_crc | bool
+  tags:
+    - bootstrap
+    - bootstrap_layout
+    - crc_layout
+  ansible.builtin.include_tasks:
+    file: crc_layout.yml
+    apply:
+      tags:
+        - bootstrap
+        - bootstrap_layout
+        - crc_layout
+
+- name: Consume dev-scripts for OCP cluster
+  when:
+    - _use_ocp
+    - (
+        _cifmw_libvirt_manager_layout.vms.ocp.target is defined and
+        _cifmw_libvirt_manager_layout.vms.ocp.target == inventory_hostname
+      ) or
+      _cifmw_libvirt_manager_layout.vms.ocp.target is undefined
+  tags:
+    - bootstrap
+    - bootstrap_layout
+    - libvirt_layout
+    - devscripts_layout
+    - ocp_layout
+  ansible.builtin.include_tasks:
+    file: ocp_layout.yml
+    apply:
+      tags:
+        - bootstrap
+        - bootstrap_layout
+        - devscripts_layout
+        - ocp_layout
+
+- name: Load the architecture local kustomize patches
+  when:
+    - cifmw_architecture_scenario is defined
+  ansible.builtin.include_role:
+    name: kustomize_deploy
+    tasks_from: generate_base64_patches_from_tree.yml
+
+- name: Consume libvirt_manager
+  when:
+    - cifmw_use_libvirt | default(false) | bool
+  tags:
+    - bootstrap
+    - bootstrap_layout
+    - bootstrap_env
+  ansible.builtin.include_tasks:
+    file: libvirt_layout.yml
+    apply:
+      tags:
+        - bootstrap
+        - bootstrap_layout
+        - bootstrap_env
+
+- name: Apply VLAN ids to TAP type interfaces.
+  when:
+    - _cifmw_libvirt_manager_layout.networks is defined
+    - _use_ocp
+    - (
+        _cifmw_libvirt_manager_layout.vms.ocp.target is defined and
+        _cifmw_libvirt_manager_layout.vms.ocp.target == inventory_hostname
+      ) or
+      _cifmw_libvirt_manager_layout.vms.ocp.target is undefined
+  tags:
+    - bootstrap
+    - bootstrap_layout
+  become: true
+  cifmw.general.bridge_vlan:
+    networks: >-
+      {{
+        _cifmw_libvirt_manager_layout.networks.keys() | list
+      }}
+  failed_when: false
+
+- name: Run only on hypervisor with controller-0
+  when:
+    - (
+        _cifmw_libvirt_manager_layout.vms.controller.target is defined and
+        _cifmw_libvirt_manager_layout.vms.controller.target == inventory_hostname
+      ) or
+      _cifmw_libvirt_manager_layout.vms.controller.target is undefined
+  block:
+    - name: Push local code
+      tags:
+        - bootstrap_repositories
+        - bootstrap
+      ansible.builtin.include_tasks: push_code.yml
+
+    - name: Group tasks on controller-0
+      delegate_to: controller-0
+      block:
+        - name: Inject CI Framework motd
+          become: true
+          ansible.builtin.template:
+            dest: "/etc/motd.d/cifmw.motd"
+            src: "motd.j2"
+            mode: "0644"
+
+        - name: Rotate some logs
+          tags:
+            - always
+          ansible.builtin.include_tasks: rotate_log.yml
+          loop:
+            - "/home/zuul/ansible-bootstrap.log"
+
+        - name: Bootstrap environment on controller-0
+          vars:
+            # NOTE: need to overwrite parent vars:
+            # ./roles/reproducer/molecule/crc_layout/converge.yml
+            cifmw_basedir: "{{ ansible_user_dir ~ '/ci-framework-data' }}"
+            cifmw_repo_setup_basedir: "/home/zuul/ci-framework-data"
+            cifmw_ci_setup_oc_install_path: "/home/zuul/bin"
+          no_log: "{{ cifmw_nolog | default(true) | bool }}"
+          ansible.builtin.import_role:
+            name: cifmw_setup
+            tasks_from: bootstrap.yml
+
+        - name: Install dev tools from install_yamls on controller-0
+          environment:
+            ANSIBLE_LOG_PATH: "~/ansible-bootstrap.log"
+          vars:
+            _devsetup_path: >-
+              {{
+                (
+                  cifmw_install_yamls_repo | default('/home/zuul/src/github.com/openstack-k8s-operators/install_yamls'),
+                  'devsetup'
+                ) | ansible.builtin.path_join
+              }}
+          no_log: "{{ cifmw_nolog | default(true) | bool }}"
+          ansible.builtin.command:
+            chdir: "{{ _devsetup_path }}"
+            cmd: >-
+              ansible-playbook -i ~/ci-framework-data/artifacts/zuul_inventory.yml
+              download_tools.yaml --tags kustomize,kubectl
+            creates: "/home/zuul/bin/kubectl"
+
+        - name: Configure CRC network if needed
+          when:
+            - _use_crc | bool
+          vars:
+            cifmw_openshift_kubeconfig: "/home/zuul/.kube/config"
+          ansible.builtin.include_role:
+            name: openshift_setup
+            tasks_from: patch_network_operator.yml
+
+# Run from the hypervisor
+- name: Ensure OCP cluster is stable
+  when:
+    - _wait_ocp_cluster is defined
+    - _wait_ocp_cluster | bool
+  tags:
+    - bootstrap
+    - bootstrap_layout
+  vars:
+    _auth_path: >-
+      {{
+        (
+          cifmw_devscripts_repo_dir,
+          'ocp',
+          cifmw_devscripts_config.cluster_name,
+          'auth'
+        ) | ansible.builtin.path_join
+      }}
+    cifmw_openshift_adm_op: "stable"
+    cifmw_openshift_kubeconfig: >-
+      {{ (_auth_path, 'kubeconfig') | ansible.builtin.path_join }}
+  ansible.builtin.include_role:
+    name: openshift_adm
+
+- name: Run from controller-0
+  when:
+    - _has_openshift
+    - (
+        _cifmw_libvirt_manager_layout.vms.controller.target is defined and
+        _cifmw_libvirt_manager_layout.vms.controller.target == inventory_hostname
+      ) or
+      _cifmw_libvirt_manager_layout.vms.controller.target is undefined
+  delegate_to: controller-0
+  block:
+    - name: Emulate CI job
+      when:
+        - cifmw_job_uri is defined
+      ansible.builtin.include_tasks: ci_job.yml
+
+    - name: Prepare architecture-based deployment
+      when:
+        - cifmw_architecture_scenario is defined
+        - cifmw_job_uri is undefined
+      tags:
+        - deploy_architecture
+      ansible.builtin.include_tasks:
+        file: configure_architecture.yml
+        apply:
+          tags:
+            - deploy_architecture
+
+    - name: Prepare architecture-based post deployment
+      when:
+        - cifmw_architecture_scenario is defined
+        - cifmw_job_uri is undefined
+      tags:
+        - deploy_architecture
+      ansible.builtin.include_tasks:
+        file: configure_post_deployment.yml
+
+    - name: Prepare ci-like EDPM deploy
+      when:
+        - cifmw_job_uri is undefined
+      delegate_to: controller-0
+      vars:
+        run_directory: "{{ _cifmw_reproducer_framework_location }}"
+        exports:
+          ANSIBLE_LOG_PATH: "~/ansible-deploy-edpm.log"
+        default_extravars:
+          - "@scenarios/centos-9/base.yml"
+          - "@scenarios/centos-9/edpm_ci.yml"
+          - "cifmw_openshift_password='{{ cifmw_openshift_password }}'"
+        extravars: "{{ cifmw_reproducer_play_extravars }}"
+        playbook: "deploy-edpm.yml"
+      ansible.builtin.template:
+        dest: "/home/zuul/deploy-edpm.sh"
+        src: "script.sh.j2"
+        mode: "0755"
+        owner: "zuul"
+        group: "zuul"

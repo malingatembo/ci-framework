@@ -16,10 +16,10 @@
 
 - name: Remove virtualenv
   ansible.builtin.file:
-    path: "{{ cifmw_repo_setup_venv }}"
+    path: "{{ _runtime_basedir }}/venv/repo_setup"
     state: absent
 
 - name: Remove repositories
   ansible.builtin.file:
-    path: "{{ cifmw_repo_setup_basedir }}/artifacts/repositories"
+    path: "{{ _runtime_basedir }}/artifacts/repositories"
     state: absent

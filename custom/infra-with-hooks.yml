@@ -1,0 +1,9 @@
+---
+# Upstream-compatible infrastructure deployment with automatic hooks
+# Uses official CI Framework playbooks: 01-bootstrap + 02-infra
+
+- name: Bootstrap environment
+  ansible.builtin.import_playbook: ../playbooks/01-bootstrap.yml
+
+- name: Deploy infrastructure with hooks
+  ansible.builtin.import_playbook: ../playbooks/02-infra.yml

@@ -72,14 +72,14 @@
         cmd: >-
           {{ cifmw_ci_setup_oc_install_path }}/oc completion bash |
           tee -a ~/.oc_completion
-        creates: "{{ ansible_user_dir }}/.oc_completion"
+        creates: "~/.oc_completion"
       no_log: true
 
     - name: Source completion from within .bashrc
       ansible.builtin.blockinfile:
         create: true
         mode: "0644"
-        path: "{{ ansible_user_dir }}/.bashrc"
+        path: "~/.bashrc"
         block: |-
           if [ -f ~/.oc_completion ]; then
             source ~/.oc_completion

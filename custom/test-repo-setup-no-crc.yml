@@ -1,0 +1,16 @@
+---
+# Minimal scenario to test repo_setup fixes WITHOUT CRC
+# This deploys only compute-0 and controller-0 VMs
+
+cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+cifmw_libvirt_manager_user: zuul
+cifmw_nolog: false
+
+# REQUIRED for reproducer
+cifmw_use_libvirt: true
+
+# DISABLE CRC - saves 26 minutes
+cifmw_use_crc: false
+
+# Enable repo_setup to trigger on VMs
+cifmw_repo_setup_promotion: current-podified

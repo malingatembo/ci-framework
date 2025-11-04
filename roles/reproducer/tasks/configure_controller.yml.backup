@@ -1,0 +1,512 @@
+---
+- name: Set facts related to the reproducer
+  ansible.builtin.set_fact:
+    _ctl_reproducer_basedir: >-
+      {{
+        (
+         '/home/zuul',
+         'ci-framework-data',
+         ) | path_join
+      }}
+
+# The dynamic inventory sets the ansible_ssh_user to zuul once we get the proper
+# ssh configuration accesses set.
+- name: Configure controller-0
+  when:
+    - (
+        _cifmw_libvirt_manager_layout.vms.controller.target is defined and
+        _cifmw_libvirt_manager_layout.vms.controller.target == inventory_hostname
+      ) or
+      _cifmw_libvirt_manager_layout.vms.controller.target is undefined
+  delegate_to: controller-0
+  delegate_facts: false
+  vars:
+    cifmw_sushy_emulator_hypervisor_target: "{{ inventory_hostname }}"
+    cifmw_sushy_emulator_install_type: podman
+    cifmw_sushy_emulator_hypervisor_address: >-
+      {{ inventory_hostname }}.utility
+    cifmw_sushy_emulator_basedir: "{{ _ctl_reproducer_basedir }}"
+    cifmw_sushy_emulator_connection_name: "sushy.utility"
+    cifmw_sushy_emulator_sshkey_path: >-
+      {{
+        [_ctl_reproducer_basedir, '../.ssh/sushy_emulator-key'] |
+        path_join
+      }}
+    cifmw_podman_user_linger: "zuul"
+    cifmw_sushy_emulator_libvirt_user: >-
+      {{
+        hostvars[cifmw_sushy_emulator_hypervisor_target].ansible_user_id |
+        default('zuul')
+      }}
+  block:
+    - name: Ensure directories exist
+      ansible.builtin.file:
+        path: "{{ _ctl_reproducer_basedir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - parameters
+        - artifacts
+
+    - name: Tweak dnf configuration
+      become: true
+      community.general.ini_file:
+        no_extra_spaces: true
+        option: "{{ config.option }}"
+        path: "/etc/dnf/dnf.conf"
+        section: "{{ config.section | default('main') }}"
+        state: "{{ config.state | default(omit) }}"
+        value: "{{ config.value | default(omit) }}"
+        mode: "0644"
+      loop: "{{ cifmw_reproducer_dnf_tweaks }}"
+      loop_control:
+        label: "{{ config.option }}"
+        loop_var: 'config'
+
+    - name: Install custom CA if needed
+      ansible.builtin.import_role:
+        name: install_ca
+
+    - name: RHEL repository setup for ansible-controller
+      become: true
+      when:
+        - cifmw_repo_setup_rhos_release_rpm is defined
+      block:
+        - name: Get rhos-release and setup repos
+          ansible.builtin.import_tasks: rhos_release.yml
+
+        - name: Create bundle for CRC
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail;
+              cat /etc/pki/ca-trust/source/anchors/* >
+              /etc/pki/ca-trust/source/anchors/rh.crt
+            creates: "/etc/pki/ca-trust/source/anchors/rh.crt"
+
+    - name: Install some tools
+      become: true
+      async: 600  # 10 minutes should be enough
+      poll: 0
+      register: _async_pkg_install
+      ansible.builtin.package:
+        name:
+          - bash-completion
+          - bind-utils
+          - git-core
+          - make
+          - podman
+          - python3-jmespath
+          - python3-netaddr
+          - python3-pip
+          - tmux
+          - vim
+          - wget
+          - jq
+
+    - name: Inject command aliases for faster debugging
+      become: true
+      ansible.builtin.copy:
+        dest: "/etc/profile.d/cifmw-aliases.sh"
+        mode: "0644"
+        content: |-
+          # Aliases managed by ci-framework/reproducer/configure_controller.yml
+          # Feel free to submit PR to get more aliases in the file.
+          alias oc-job-log="oc logs -f -l job-name=$1"
+
+    - name: Build job inventory for hook usage
+      tags:
+        - bootstrap
+      ansible.builtin.shell:
+        cmd: >-
+          cat /home/zuul/reproducer-inventory/* >
+          {{  _ctl_reproducer_basedir }}/artifacts/zuul_inventory.yml
+
+    # You want to use the "name" parameter of the ansible.builtin.include_vars
+    # call, such as:
+    # - name: Load mac mapping
+    #   ansible.builtin.include_vars:
+    #     file: "{{ _ctl_reproducer_basedir }}/parameters/interfaces-info.yml"
+    #     name: my_fancy_name
+    # Then you'll be able to access the mapping content via `my_fancy_name`.
+    - name: Push the MAC mapping data
+      tags:
+        - bootstrap
+      when:
+        - cifmw_libvirt_manager_mac_map is defined
+      ansible.builtin.copy:
+        mode: "0644"
+        dest: "{{ _ctl_reproducer_basedir }}/parameters/interfaces-info.yml"
+        content: "{{ cifmw_libvirt_manager_mac_map | to_nice_yaml }}"
+
+    - name: Inject other Hypervisor SSH keys
+      when:
+        - hostvars[host]['priv_ssh_key'] is defined
+      vars:
+        _ssh_key: "{{ hostvars[host]['priv_ssh_key']['content'] | b64decode }}"
+        _ssh_host: >-
+          {{
+            hostvars[host]['ansible_host'] |
+            default(hostvars[host]['inventory_hostname'])
+          }}
+      ansible.builtin.copy:
+        dest: "/home/zuul/.ssh/ssh_{{ _ssh_host }}"
+        content: "{{ _ssh_key }}"
+        mode: "0600"
+      loop: "{{ hostvars.keys() }}"
+      loop_control:
+        label: "{{ host }}"
+        loop_var: "host"
+
+    # We need to configure SSH on controller-0 so that
+    # it will consume the right ssh key and not obsess on
+    # remote host key checking. We have to put this in the
+    # local .ssh/config, because ProxyJump doesn't take the
+    # command line options, meaning ssh won't consume the various
+    # options set in the ansible inventory.
+    - name: Inject remote hypervisor SSH configuration
+      when:
+        - hostvars[host]['priv_ssh_key'] is defined
+      vars:
+        _ssh_host: >-
+          {{
+            hostvars[host]['ansible_host'] |
+            default(hostvars[host]['inventory_hostname'])
+          }}
+      ansible.builtin.blockinfile:
+        create: true
+        mode: "0600"
+        path: "/home/zuul/.ssh/config"
+        marker: "## {mark} {{ _ssh_host }}"
+        block: |-
+          Host {{ _ssh_host }} {{ hostvars[host]['inventory_hostname'] }}
+            Hostname {{ _ssh_host }}
+            IdentityFile ~/.ssh/ssh_{{ _ssh_host }}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            User {{ hostvars[host]['ansible_user'] | default(ansible_user_id) }}
+      loop: "{{ hostvars.keys() }}"
+      loop_control:
+        label: "{{ host }}"
+        loop_var: "host"
+
+    - name: Inject SSH configuration
+      when:
+        - hostvars[host].ansible_host is defined
+        - hostvars[host].ansible_ssh_user is defined
+      vars:
+        _vm_type: "{{ host | regex_replace('\\-[0-9]*', '') }}"
+        _vm_data: "{{ _cifmw_libvirt_manager_layout.vms[_vm_type] }}"
+        _ocp_name: >-
+          {{
+            host | replace('_', '-') |
+            replace('ocp-worker', 'worker') |
+            replace('ocp-master', 'master')
+          }}
+        _hostname: >-
+          {{
+            (host is match('^ocp.*')) |
+            ternary(_ocp_name, host)
+          }}
+      ansible.builtin.blockinfile:
+        create: true
+        mode: "0600"
+        path: "/home/zuul/.ssh/config"
+        marker: "## {mark} {{ host }}"
+        block: |-
+          Host {{ host }} {{ _hostname }} {{ _hostname }}.utility {{ hostvars[host].ansible_host }}
+            Hostname {{ _hostname }}.utility
+            User {{ hostvars[host].ansible_ssh_user }}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          {% if host is match('^ocp.*') %}
+            IdentityFile ~/.ssh/devscripts_key
+          {% elif host is match('^crc.*') %}
+            IdentityFile ~/.ssh/crc_key
+          {% else %}
+            IdentityFile ~/.ssh/id_cifw
+          {% endif %}
+      loop: "{{ hostvars.keys() }}"
+      loop_control:
+        loop_var: host
+        label: "{{ host }}"
+
+    - name: Create kube directory
+      ansible.builtin.file:
+        path: "/home/zuul/.kube"
+        state: directory
+        owner: "{{ cifmw_reproducer_user }}"
+        group: "{{ cifmw_reproducer_user }}"
+        mode: "0750"
+
+    - name: Inject kubeconfig content
+      when:
+        - _devscripts_kubeconfig.content is defined or
+          _crc_kubeconfig.content is defined
+      ansible.builtin.copy:
+        dest: "/home/zuul/.kube/config"
+        content: >-
+          {{
+            (_use_ocp | bool) |
+            ternary(_devscripts_kubeconfig.content, _crc_kubeconfig.content) |
+            b64decode
+          }}
+        owner: "{{ cifmw_reproducer_user }}"
+        group: "{{ cifmw_reproducer_user }}"
+        mode: "0640"
+
+    - name: Inject kubeadmin-password if exists
+      when:
+        - _devscripts_kubeadm.content is defined or
+          _crc_kubeadm.content is defined
+      ansible.builtin.copy:
+        dest: "/home/zuul/.kube/kubeadmin-password"
+        content: >-
+          {{
+            (_devscripts_kubeadm.content is defined) |
+            ternary(_devscripts_kubeadm.content, _crc_kubeadm.content) |
+            b64decode
+          }}
+        owner: "{{ cifmw_reproducer_user }}"
+        group: "{{ cifmw_reproducer_user }}"
+        mode: "0600"
+
+    - name: Inject devscripts private key if set
+      when:
+        - _devscript_privkey.content is defined
+      ansible.builtin.copy:
+        dest: "{{ ansible_user_dir }}/.ssh/devscripts_key"
+        content: "{{ _devscript_privkey.content | b64decode }}"
+        owner: "{{ cifmw_reproducer_user }}"
+        group: "{{ cifmw_reproducer_user }}"
+        mode: "0400"
+
+    - name: Ensure /etc/ci/env is created
+      become: true
+      ansible.builtin.file:
+        path: /etc/ci/env
+        state: directory
+        mode: "0755"
+
+    - name: Manage secrets on controller-0
+      vars:
+        cifmw_manage_secrets_basedir: "/home/zuul/ci-framework-data"
+        cifmw_manage_secrets_owner: "{{ cifmw_reproducer_user }}"
+      block:
+        - name: Initialize secret manager
+          ansible.builtin.import_role:
+            name: manage_secrets
+
+        - name: Inject secrets
+          ansible.builtin.import_role:
+            name: manage_secrets
+            tasks_from: reproducer.yml
+
+    - name: Inject FQDN in /etc/hosts
+      become: true
+      ansible.builtin.blockinfile:
+        dest: /etc/hosts
+        block: |-
+         127.0.0.2 {{ hostvars['controller-0'].ansible_host }}
+         ::2 {{ hostvars['controller-0'].ansible_host }}
+
+    - name: Ensure packages are installed
+      become: true
+      block:
+        - name: Check if async file is still available
+          register: _async_flag
+          ansible.builtin.stat:
+            path: >-
+              /root/.ansible_async/{{ _async_pkg_install.ansible_job_id }}
+
+        - name: Check package install status
+          when:
+            - _async_flag.stat.exists
+          register: _async_status
+          ansible.builtin.async_status:
+            jid: "{{ _async_pkg_install.ansible_job_id }}"
+          until: _async_status.finished
+          retries: 100
+          delay: 5
+
+    # Deploy Sushy Emulator on the Ansible controller,
+    - name: Deploy Sushy Emulator service container
+      tags:
+        - bootstrap
+        - bootstrap_layout
+      when: cifmw_use_sushy_emulator | default(true) | bool
+      block:
+        # Switch to import_role to ensure we load the parameters
+        # and environment, that are then consumed further down in
+        # generate_bm_info.yml
+        - name: Deploy Sushy Emulator
+          ansible.builtin.import_role:
+            name: sushy_emulator
+
+        - name: Generate baremetal-info fact
+          ansible.builtin.import_tasks: generate_bm_info.yml
+
+        - name: Verify connection to baremetal VMs via Sushy Emulator
+          ansible.builtin.include_role:
+            name: sushy_emulator
+            tasks_from: verify.yml
+
+    - name: Check if cifmw_reproducer_src_dir is on localhost
+      delegate_to: localhost
+      ansible.builtin.stat:
+        path: "{{ cifmw_reproducer_src_dir }}"
+      register: cifmw_reproducer_src_dir_stat
+      run_once: true
+      ignore_errors: true
+
+    - name: Sync local repositories to other hosts if present
+      delegate_to: localhost
+      ansible.posix.synchronize:
+        src: "{{ cifmw_reproducer_src_dir }}/"
+        dest: "zuul@{{ item }}:{{ cifmw_reproducer_src_dir }}"
+        archive: true
+        recursive: true
+      loop: "{{ groups['controllers'] }}"
+      when:
+        - cifmw_reproducer_src_dir_stat.stat is defined
+        - cifmw_reproducer_src_dir_stat.stat.exists
+        - cifmw_reproducer_src_dir_stat.stat.isdir
+
+    - name: Check if local common-requirements.txt exists
+      delegate_to: localhost
+      ansible.builtin.stat:
+        path: "{{ cifmw_reproducer_src_dir }}/github.com/openstack-k8s-operators/ci-framework/common-requirements.txt"
+      register: _local_common_requirements_check
+      run_once: true
+      ignore_errors: true
+
+    - name: Install ansible dependencies
+      register: _async_dep_install
+      async: 600  # 10 minutes should be more than enough
+      poll: 0
+      ansible.builtin.pip:
+        requirements: "{{ have_local | ternary(local, remote) }}"
+      vars:
+        have_local: "{{ _local_common_requirements_check.stat is defined and _local_common_requirements_check.stat.exists }}"
+        local: "{{ cifmw_reproducer_src_dir }}/github.com/openstack-k8s-operators/ci-framework/common-requirements.txt"
+        remote: https://raw.githubusercontent.com/openstack-k8s-operators/ci-framework/main/common-requirements.txt
+
+    - name: Inject most of the cifmw_ parameters passed to the reproducer run
+      tags:
+        - bootstrap_env
+      vars:
+        _filtered_vars: >-
+          {{
+            hostvars[inventory_hostname] | default({}) |
+            dict2items |
+            selectattr('key', 'match',
+                       '^(pre|post|cifmw)_(?!install_yamls|devscripts).*') |
+            rejectattr('key', 'equalto', 'cifmw_target_host') |
+            rejectattr('key', 'equalto', 'cifmw_basedir') |
+            rejectattr('key', 'equalto', 'cifmw_path') |
+            rejectattr('key', 'equalto', 'cifmw_extras') |
+            rejectattr('key', 'equalto', 'cifmw_openshift_kubeconfig') |
+            rejectattr('key', 'equalto', 'cifmw_openshift_token') |
+            rejectattr('key', 'equalto', 'cifmw_networking_env_definition') |
+            rejectattr('key', 'match', '^cifmw_use_(?!lvms).*') |
+            rejectattr('key', 'match', '^cifmw_reproducer.*') |
+            rejectattr('key', 'match', '^cifmw_rhol.*') |
+            rejectattr('key', 'match', '^cifmw_discover.*') |
+            rejectattr('key', 'match', '^cifmw_libvirt_manager.*') |
+            rejectattr('key', 'match', '^cifmw_manage_secrets_(pullsecret|citoken).*') |
+            items2dict
+          }}
+      ansible.builtin.copy:
+        mode: "0644"
+        dest: "/home/zuul/ci-framework-data/parameters/reproducer-variables.yml"
+        content: "{{ _filtered_vars | to_nice_yaml }}"
+
+    - name: Create reproducer-variables.yml symlink to old location
+      ansible.builtin.file:
+        dest: "/home/zuul/reproducer-variables.yml"
+        src: "/home/zuul/ci-framework-data/parameters/reproducer-variables.yml"
+        state: link
+
+    - name: Inject local environment parameters
+      ansible.builtin.copy:
+        mode: "0644"
+        dest: "/home/zuul/ci-framework-data/parameters/openshift-environment.yml"
+        content: |-
+          {% raw %}
+          ---
+          cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+          cifmw_openshift_login_password_file: >-
+            {{ ansible_user_dir }}/.kube/kubeadmin-password
+          cifmw_openshift_login_kubeconfig: >-
+            {{ ansible_user_dir }}/.kube/config
+          cifmw_architecture_automation_file: >-
+            {{
+              (
+                cifmw_architecture_repo | default(ansible_user_dir+'/src/github.com/openstack-k8s-operators/architecture'),
+                'automation/vars',
+                cifmw_architecture_scenario~'.yaml'
+              ) | ansible.builtin.path_join
+            }}
+          {% endraw %}
+
+    - name: Create openshift-environment.yml symlink to old location
+      ansible.builtin.file:
+        dest: "/home/zuul/openshift-environment.yml"
+        src: "/home/zuul/ci-framework-data/parameters/openshift-environment.yml"
+        state: link
+
+    - name: Get interfaces-info content
+      register: _nic_info
+      ansible.builtin.slurp:
+        src: "{{ _ctl_reproducer_basedir }}/parameters/interfaces-info.yml"
+
+    # We detected OCP cluster may have some downtime even after it's supposed
+    # to be started.
+    # It means everything was right from the libvirt_manager point of view, it
+    # could get access, configure the needed bits and move on.
+    # But when we hit this step, cluster may be unresponsive - suspecting
+    # some NetworkManager or related tool doing some "late" tasks.
+    # This task here is to ensure all of the OCPs nodes are ready to be
+    # consumed by the networking_mapper - it will connect to all of the nodes
+    # in order to gather some facts of interest.
+    - name: Wait for OCP nodes to be ready
+      when:
+        - groups.ocps is defined
+        - groups.ocps | length > 0
+      delegate_to: "{{ item }}"
+      ansible.builtin.wait_for_connection:
+        sleep: 2
+        timeout: 300
+      loop: "{{ groups.ocps }}"
+
+    - name: Generate networking definition
+      vars:
+        cifmw_networking_mapper_ifaces_info: >-
+          {{ _nic_info.content | b64decode | from_yaml }}
+        cifmw_networking_mapper_network_name: >-
+          {{ _cifmw_libvirt_manager_layout.vms.controller.nets.1 }}
+        cifmw_networking_mapper_basedir: "/home/zuul/ci-framework-data"
+      ansible.builtin.import_role:
+        name: networking_mapper
+
+    - name: Inject CRC related content if needed
+      when:
+        - _use_crc | bool
+      block:
+        - name: Inject CRC ssh key
+          ansible.builtin.copy:
+            dest: "/home/zuul/.ssh/crc_key"
+            content: "{{ crc_priv_key['content'] | b64decode }}"
+            mode: "0400"
+            owner: "{{ cifmw_reproducer_user }}"
+            group: "{{ cifmw_reproducer_user }}"
+
+    - name: Ensure we have all dependencies installed
+      ansible.builtin.async_status:
+        jid: "{{ _async_dep_install.ansible_job_id }}"
+      register: _sync_dep_install_result
+      until: _sync_dep_install_result.finished
+      retries: 20
+
+    - name: Configure ntp service
+      ansible.builtin.include_role:
+        name: cifmw_ntp

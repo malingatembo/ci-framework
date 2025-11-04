@@ -1,0 +1,31 @@
+---
+# Minimal deployment for automatic post_infra hook execution
+# Uses deploy-edpm.yml (NOT reproducer.yml)
+
+# Base configuration
+cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+cifmw_path: "{{ ansible_user_dir }}/.crc/bin:{{ ansible_user_dir }}/.crc/bin/oc:{{ ansible_user_dir }}/bin:{{ ansible_env.PATH }}"
+
+# Pull secret (required)
+cifmw_manage_secrets_pullsecret_file: "{{ ansible_user_dir }}/ci-framework-data/pull-secret.txt"
+
+# Enable CRC deployment
+cifmw_use_crc: true
+
+# CRC configuration
+cifmw_rhol_crc_config:
+  disk-size: 100
+  memory: 32000
+
+# Critical fixes for delegation bugs
+cifmw_nolog: false
+cifmw_libvirt_manager_user: zuul
+
+# SKIP EDPM/OpenStack deployment (this is the key!)
+cifmw_edpm_deploy_nfs: false
+
+# post_infra hook - will execute AUTOMATICALLY with deploy-edpm.yml
+post_infra:
+  - name: "Test post-deploy hook"
+    type: playbook
+    source: "{{ ansible_user_dir }}/team-deployments/hooks/test-webhook.yml"

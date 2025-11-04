@@ -1,0 +1,37 @@
+---
+# Minimal scenario to test repo_setup delegation fixes
+# Skips CRC to avoid timeout, focuses on compute/controller VMs
+
+cifmw_basedir: "{{ ansible_user_dir }}/ci-framework-data"
+cifmw_libvirt_manager_user: zuul
+cifmw_nolog: false
+cifmw_path: "{{ ansible_user_dir }}/.crc/bin:{{ ansible_user_dir }}/.crc/bin/oc:{{ ansible_user_dir }}/bin:{{ ansible_env.PATH }}"
+
+cifmw_use_libvirt: true
+
+cifmw_libvirt_manager_configuration:
+  vms:
+    compute:
+      amount: 1
+      image_url: "{{ cifmw_discovered_image_url }}"
+      sha256_image_name: "{{ cifmw_discovered_hash }}"
+      image_local_dir: "{{ cifmw_basedir }}/images/"
+      disk_file_name: "centos-stream-9.qcow2"
+      disksize: 50
+      memory: 4
+      cpus: 2
+      nets:
+        - default
+    controller:
+      image_url: "{{ cifmw_discovered_image_url }}"
+      sha256_image_name: "{{ cifmw_discovered_hash }}"
+      image_local_dir: "{{ cifmw_basedir }}/images/"
+      disk_file_name: "centos-stream-9.qcow2"
+      disksize: 50
+      memory: 4
+      cpus: 2
+      nets:
+        - default
+  networks:
+    default:
+      default: true
