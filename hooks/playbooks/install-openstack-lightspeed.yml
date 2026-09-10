@@ -184,16 +184,14 @@
 
     - name: Build OpenStackLightspeed CR spec
       ansible.builtin.set_fact:
-        openstack_lightspeed_cr_spec:
+        openstack_lightspeed_cr_spec: "{{ base_spec | combine(tls_spec) }}"
+      vars:
+        base_spec:
           llmEndpoint: "{{ cifmw_openstack_lightspeed_llm_endpoint }}"
           llmEndpointType: "{{ cifmw_openstack_lightspeed_llm_endpoint_type | default('openai') }}"
           modelName: "{{ cifmw_openstack_lightspeed_model_name }}"
           llmCredentials: "{{ cifmw_openstack_lightspeed_llm_credentials | default('openstack-lightspeed-apitoken') }}"
-
-    - name: Add tlsCACertBundle to CR spec if TLS cert vars provided
-      ansible.builtin.set_fact:
-        openstack_lightspeed_cr_spec: "{{ openstack_lightspeed_cr_spec | combine({'tlsCACertBundle': cifmw_openstack_lightspeed_tls_ca_cert_bundle | default('openstack-lightspeed-certs')}) }}"
-      when: cifmw_openstack_lightspeed_ca_cert is defined or cifmw_openstack_lightspeed_ca_cert_url is defined
+        tls_spec: "{{ {'tlsCACertBundle': cifmw_openstack_lightspeed_tls_ca_cert_bundle | default('openstack-lightspeed-certs')} if (cifmw_openstack_lightspeed_ca_cert is defined or cifmw_openstack_lightspeed_ca_cert_url is defined) else {} }}"
 
     - name: Create OpenStackLightspeed custom resource
       kubernetes.core.k8s:
@@ -221,18 +219,6 @@
         - cr_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | select('equalto', 'True') | list | length > 0
       retries: 30
       delay: 10
-      failed_when: false
-
-    - name: Assert OpenStackLightspeed deployment successful
-      ansible.builtin.assert:
-        that:
-          - cr_status.resources is defined
-          - cr_status.resources | length > 0
-          - cr_status.resources[0].status is defined
-          - cr_status.resources[0].status.conditions is defined
-          - cr_status.resources[0].status.conditions | selectattr('type', 'equalto', 'Ready') | map(attribute='status') | select('equalto', 'True') | list | length > 0
-        fail_msg: "OpenStackLightspeed CR did not reach Ready state. Current status: {{ cr_status.resources[0].status | default('No status available') }}"
-        success_msg: "OpenStackLightspeed CR is Ready"
 
     - name: Display deployment summary
       ansible.builtin.debug:
